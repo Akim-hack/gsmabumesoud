@@ -93,6 +93,114 @@ body{
   border:1px solid rgba(255,255,255,.15);
   border-radius:16px;
 }
+.deposit-overlay{
+position:fixed;
+inset:0;
+background:rgba(0,0,0,.7);
+backdrop-filter:blur(8px);
+display:flex;
+align-items:center;
+justify-content:center;
+z-index:99999;
+animation:fadeIn .4s ease;
+}
+
+.deposit-card{
+width:380px;
+max-width:95%;
+background:#fff;
+border-radius:25px;
+padding:30px;
+text-align:center;
+animation:pop .5s ease;
+box-shadow:0 25px 50px rgba(0,0,0,.3);
+}
+
+.deposit-icon{
+width:90px;
+height:90px;
+margin:auto;
+border-radius:50%;
+background:linear-gradient(135deg,#22c55e,#16a34a);
+display:flex;
+align-items:center;
+justify-content:center;
+font-size:40px;
+color:white;
+animation:pulse 2s infinite;
+}
+
+.deposit-card h2{
+margin-top:20px;
+font-size:28px;
+font-weight:800;
+}
+
+.deposit-price{
+font-size:42px;
+font-weight:900;
+color:#22c55e;
+margin:15px 0;
+animation:bounce 1.5s infinite;
+}
+
+.pay-btn{
+width:100%;
+padding:16px;
+border:none;
+border-radius:15px;
+background:linear-gradient(135deg,#22c55e,#16a34a);
+color:white;
+font-size:18px;
+font-weight:800;
+cursor:pointer;
+margin-top:15px;
+transition:.3s;
+}
+
+.pay-btn:hover{
+transform:translateY(-4px);
+box-shadow:0 15px 30px rgba(34,197,94,.4);
+}
+
+.close-btn{
+width:100%;
+padding:14px;
+margin-top:10px;
+border:none;
+border-radius:15px;
+background:#ef4444;
+color:white;
+font-weight:700;
+cursor:pointer;
+}
+
+@keyframes pulse{
+0%{transform:scale(1);}
+50%{transform:scale(1.08);}
+100%{transform:scale(1);}
+}
+
+@keyframes bounce{
+0%,100%{transform:translateY(0);}
+50%{transform:translateY(-10px);}
+}
+
+@keyframes pop{
+0%{
+opacity:0;
+transform:scale(.6);
+}
+100%{
+opacity:1;
+transform:scale(1);
+}
+}
+
+@keyframes fadeIn{
+from{opacity:0;}
+to{opacity:1;}
+}
 
 .user-avatar{
   width:40px;
@@ -1558,12 +1666,57 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeAuth(); });
 document.getElementById('authModal').addEventListener('click',e=>{ if(e.target===e.currentTarget) closeAuth(); });
 function openAddFunds(){
 
-  showToast(
-    "Redirection vers la page de dépôt...",
-    "success"
-  );
+const modal = document.createElement("div");
 
-  window.location.href = "deposit.html";
+modal.innerHTML = `
+<div class="deposit-overlay">
+   <div class="deposit-card">
+
+      <div class="deposit-icon">
+         <i class="fa-solid fa-wallet"></i>
+      </div>
+
+      <h2>Add Funds</h2>
+
+      <div class="deposit-price">
+         8 USDT
+      </div>
+
+      <p>
+         Recharge your balance instantly using cryptocurrency.
+      </p>
+
+      <button class="pay-btn" onclick="goPayment()">
+         Pay Now
+      </button>
+
+      <button class="close-btn" onclick="closeDeposit()">
+         Cancel
+      </button>
+
+   </div>
+</div>
+`;
+
+document.body.appendChild(modal);
+
+window.closeDeposit = () => {
+   modal.remove();
+};
+
+window.goPayment = () => {
+
+   document.querySelector(".pay-btn").innerHTML =
+   `<i class="fa-solid fa-spinner fa-spin"></i> Loading`;
+
+   setTimeout(() => {
+
+      window.location.href =
+      "https://plisio.net/invoice/6a1e80a8fa036e18370f65cf";
+
+   },1200);
+
+};
 
 }
 </script>
