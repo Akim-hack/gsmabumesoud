@@ -1,0 +1,1259 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Tecno, Itel, Infinix MDM Official Unlock By IMEI - Tecno MDM</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<!-- Firebase SDK -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, doc, setDoc, getDoc, updateDoc, collection, addDoc, query, where, orderBy, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAoLg_GCl-TKsMv3jXCUvC6zFbrWMhjaKU",
+  authDomain: "tecno-mdm.firebaseapp.com",
+  projectId: "tecno-mdm",
+  storageBucket: "tecno-mdm.firebasestorage.app",
+  messagingSenderId: "246100255878",
+  appId: "1:246100255878:web:537eb6c309ae9c3cc3dd07",
+  measurementId: "G-S0TPLH0HYW"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// ========== GLOBAL STATE ==========
+window._fbAuth = auth;
+window._fbDb = db;
+window._fbFns = { doc, setDoc, getDoc, updateDoc, collection, addDoc, query, where, orderBy, onSnapshot, serverTimestamp };
+window._fbAuthFns = { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordResetEmail };
+
+let currentUser = null;
+let userData = null;
+let ordersUnsubscribe = null;
+
+// ========== AUTH STATE ==========
+onAuthStateChanged(auth, async (user) => {
+  if (user) {
+    currentUser = user;
+    const userRef = doc(db, "users", user.uid);
+    const snap = await getDoc(userRef);
+    if (snap.exists()) {
+      userData = snap.data();
+    } else {
+      userData = { name: user.displayName || user.email.split('@')[0], email: user.email, balance: 0, mobile: '' };
+      await setDoc(userRef, userData);
+    }
+    setLoggedInUI(userData.name);
+    listenOrders(user.uid);
+  } else {
+    currentUser = null;
+    userData = null;
+    if (ordersUnsubscribe) { ordersUnsubscribe(); ordersUnsubscribe = null; }
+    setLoggedOutUI();
+  }
+});
+
+// ========== REGISTER ==========
+window.doRegister = async function() {
+  const name = document.getElementById('regName').value.trim();
+  const email = document.getElementById('regEmail').value.trim();
+  const mobile = document.getElementById('regMobile').value.trim();
+  const pass = document.getElementById('regPass').value;
+  if (!name) { showToast('Entrez votre nom', 'error'); return; }
+  if (!email || !email.includes('@')) { showToast('Email invalide', 'error'); return; }
+  if (pass.length < 6) { showToast('Mot de passe min. 6 caractères', 'error'); return; }
+  try {
+    const btn = document.getElementById('regBtn');
+    btn.disabled = true; btn.textContent = 'Inscription...';
+    const cred = await createUserWithEmailAndPassword(auth, email, pass);
+    const userRef = doc(db, "users", cred.user.uid);
+    await setDoc(userRef, { name, email, mobile, balance: 0, createdAt: serverTimestamp() });
+    closeAuth();
+    showToast('Compte créé ! Bienvenue ' + name + ' !', 'success');
+    btn.disabled = false; btn.textContent = 'S\'inscrire';
+  } catch(e) {
+    showToast(firebaseError(e.code), 'error');
+    document.getElementById('regBtn').disabled = false;
+    document.getElementById('regBtn').textContent = "S'inscrire";
+  }
+};
+
+// ========== LOGIN ==========
+window.doLogin = async function() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const pass = document.getElementById('loginPass').value;
+  if (!email) { showToast('Entrez votre email', 'error'); return; }
+  if (!pass) { showToast('Entrez votre mot de passe', 'error'); return; }
+  try {
+    const btn = document.getElementById('loginBtn');
+    btn.disabled = true; btn.textContent = 'Connexion...';
+    await signInWithEmailAndPassword(auth, email, pass);
+    closeAuth();
+    showToast('Bienvenue ! Connexion réussie.', 'success');
+    btn.disabled = false; btn.textContent = 'Se connecter';
+  } catch(e) {
+    showToast(firebaseError(e.code), 'error');
+    document.getElementById('loginBtn').disabled = false;
+    document.getElementById('loginBtn').textContent = 'Se connecter';
+  }
+};
+
+// ========== LOGOUT ==========
+window.doLogout = async function() {
+  if (!confirm('Se déconnecter ?')) return;
+  await signOut(auth);
+  showToast('Déconnecté avec succès');
+  closeProfile();
+};
+
+// ========== FORGOT PASSWORD ==========
+window.doResetPassword = async function() {
+  const email = document.getElementById('forgotEmail').value.trim();
+  if (!email) { showToast('Entrez votre email', 'error'); return; }
+  try {
+    await sendPasswordResetEmail(auth, email);
+    showToast('Lien de réinitialisation envoyé !', 'success');
+    closeAuth();
+  } catch(e) {
+    showToast(firebaseError(e.code), 'error');
+  }
+};
+
+// ========== PLACE ORDER ==========
+window.placeOrder = async function() {
+  if (!currentUser) { openAuth('login'); return; }
+  const imei = document.getElementById('imeiInput').value.trim();
+  const checked = document.getElementById('termsCheck').checked;
+  const fileInput = document.getElementById('fileInput');
+  if (imei.length !== 15) { showToast('L\'IMEI doit contenir exactement 15 chiffres', 'error'); return; }
+  if (!fileInput.files.length) { showToast('Veuillez télécharger la photo de l\'écran de verrouillage', 'error'); return; }
+  if (!checked) { showToast('Vous devez accepter les conditions', 'error'); return; }
+
+  const balance = userData?.balance || 0;
+  if (balance < 10) {
+    showToast('Solde insuffisant. Rechargez votre compte (10 USDT requis)', 'error');
+    openProfile();
+    return;
+  }
+
+  const btn = document.getElementById('orderBtn');
+  const txt = document.getElementById('btnText');
+  const spin = document.getElementById('btnSpinner');
+  btn.disabled = true; txt.textContent = 'Traitement...'; spin.style.display = 'block';
+
+  try {
+    const newBalance = balance - 10;
+    const userRef = doc(db, "users", currentUser.uid);
+    await updateDoc(userRef, { balance: newBalance });
+    userData.balance = newBalance;
+
+    await addDoc(collection(db, "orders"), {
+      userId: currentUser.uid,
+      userName: userData.name,
+      userEmail: userData.email,
+      imei: imei,
+      service: "Tecno MDM Unlock By IMEI",
+      amount: 10,
+      status: "pending",
+      createdAt: serverTimestamp()
+    });
+
+    updateBalanceUI(newBalance);
+    showToast('✅ Commande soumise ! En attente de validation.', 'success');
+    document.getElementById('imeiInput').value = '';
+    removeImage({ stopPropagation: () => {} });
+    document.getElementById('termsCheck').checked = false;
+  } catch(e) {
+    showToast('Erreur : ' + e.message, 'error');
+  }
+  btn.disabled = false; txt.textContent = 'PASSER UNE COMMANDE'; spin.style.display = 'none';
+};
+
+// ========== LISTEN ORDERS ==========
+function listenOrders(uid) {
+  const q = query(collection(db, "orders"), where("userId", "==", uid), orderBy("createdAt", "desc"));
+  ordersUnsubscribe = onSnapshot(q, (snap) => {
+    const orders = [];
+    snap.forEach(d => orders.push({ id: d.id, ...d.data() }));
+    renderOrders(orders);
+  });
+}
+
+function renderOrders(orders) {
+  const container = document.getElementById('orderHistoryList');
+  if (!container) return;
+  if (orders.length === 0) {
+    container.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted);font-size:.85rem;">Aucune commande pour l\'instant</div>';
+    return;
+  }
+  container.innerHTML = orders.map(o => {
+    const date = o.createdAt?.toDate ? o.createdAt.toDate().toLocaleDateString('fr-FR') : 'En cours...';
+    const statusColor = o.status === 'completed' ? '#059669' : o.status === 'rejected' ? '#ef4444' : '#f59e0b';
+    const statusLabel = o.status === 'completed' ? '✅ Validée' : o.status === 'rejected' ? '❌ Rejetée' : '⏳ En attente';
+    return `<div class="order-item">
+      <div class="order-item-header">
+        <span class="order-service">${o.service}</span>
+        <span class="order-badge" style="background:${statusColor}20;color:${statusColor}">${statusLabel}</span>
+      </div>
+      <div class="order-item-meta">
+        <span>📱 IMEI: <strong>${o.imei}</strong></span>
+        <span>💵 <strong>${o.amount} USDT</strong></span>
+        <span>📅 ${date}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ========== RECHARGE ==========
+window.submitRecharge = async function() {
+  if (!currentUser) return;
+  const amount = parseFloat(document.getElementById('rechargeAmount').value);
+  const txid = document.getElementById('rechargeTxid').value.trim();
+  if (!amount || amount < 5) { showToast('Montant minimum : 5 USDT', 'error'); return; }
+  if (!txid) { showToast('Entrez le TXID de la transaction', 'error'); return; }
+
+  try {
+    await addDoc(collection(db, "recharge_requests"), {
+      userId: currentUser.uid,
+      userName: userData.name,
+      userEmail: userData.email,
+      amount,
+      txid,
+      status: "pending",
+      createdAt: serverTimestamp()
+    });
+    showToast('Demande de recharge envoyée ! En attente de validation.', 'success');
+    document.getElementById('rechargeAmount').value = '';
+    document.getElementById('rechargeTxid').value = '';
+    closeRechargeModal();
+  } catch(e) {
+    showToast('Erreur : ' + e.message, 'error');
+  }
+};
+
+// ========== UPDATE BALANCE UI ==========
+function updateBalanceUI(balance) {
+  const els = document.querySelectorAll('.user-balance-display');
+  els.forEach(el => el.textContent = parseFloat(balance || 0).toFixed(2) + ' USDT');
+}
+
+// ========== FIREBASE ERROR ==========
+function firebaseError(code) {
+  const msgs = {
+    'auth/email-already-in-use': 'Cet email est déjà utilisé',
+    'auth/invalid-email': 'Email invalide',
+    'auth/weak-password': 'Mot de passe trop faible',
+    'auth/user-not-found': 'Utilisateur introuvable',
+    'auth/wrong-password': 'Mot de passe incorrect',
+    'auth/invalid-credential': 'Email ou mot de passe incorrect',
+    'auth/too-many-requests': 'Trop de tentatives. Réessayez plus tard',
+  };
+  return msgs[code] || 'Erreur. Réessayez.';
+}
+
+// ========== UI HELPERS ==========
+function setLoggedInUI(name) {
+  document.getElementById('authBtns').style.display = 'none';
+  document.getElementById('userChip').style.display = 'flex';
+  document.getElementById('userName').textContent = name;
+  document.getElementById('userInitial').textContent = name.charAt(0).toUpperCase();
+  document.getElementById('loginAlert').style.display = 'none';
+  document.getElementById('orderFormWrap').style.opacity = '1';
+  document.getElementById('orderFormWrap').style.pointerEvents = 'auto';
+  document.getElementById('orderBtn').disabled = false;
+  updateBalanceUI(userData?.balance || 0);
+}
+
+function setLoggedOutUI() {
+  document.getElementById('authBtns').style.display = 'flex';
+  document.getElementById('userChip').style.display = 'none';
+  document.getElementById('loginAlert').style.display = 'flex';
+  document.getElementById('orderFormWrap').style.opacity = '.6';
+  document.getElementById('orderFormWrap').style.pointerEvents = 'none';
+  document.getElementById('orderBtn').disabled = true;
+  const container = document.getElementById('orderHistoryList');
+  if (container) container.innerHTML = '';
+}
+
+window.openProfile = function() {
+  if (!currentUser || !userData) { openAuth('login'); return; }
+  document.getElementById('profileName').textContent = userData.name;
+  document.getElementById('profileEmail').textContent = userData.email;
+  document.getElementById('profileInitial').textContent = userData.name.charAt(0).toUpperCase();
+  updateBalanceUI(userData.balance || 0);
+  document.getElementById('profileModal').classList.add('open');
+};
+window.closeProfile = function() { document.getElementById('profileModal').classList.remove('open'); };
+window.openRechargeModal = function() { document.getElementById('rechargeModal').classList.add('open'); };
+window.closeRechargeModal = function() { document.getElementById('rechargeModal').classList.remove('open'); };
+</script>
+
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --primary:#3b82f6;--primary-dark:#2563eb;--primary-light:#dbeafe;
+  --success:#10b981;--danger:#ef4444;--warning:#f59e0b;
+  --bg:#f3f4f6;--white:#ffffff;--card:#ffffff;
+  --border:#e5e7eb;--border2:#d1d5db;
+  --text:#111827;--text2:#374151;--muted:#6b7280;--muted2:#9ca3af;
+  --nav-bg:#1e293b;--nav-text:#cbd5e1;
+}
+body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
+
+/* ===== TOPBAR ===== */
+.topbar{background:var(--nav-bg);height:56px;display:flex;align-items:center;padding:0 1rem;position:sticky;top:0;z-index:500;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.topbar-logo{display:flex;align-items:center;gap:8px;text-decoration:none;margin-right:auto}
+.logo-text{font-size:1rem;font-weight:800;color:#f1f5f9;letter-spacing:-.3px;white-space:nowrap}
+.topbar-nav{display:flex;align-items:center;gap:2px;flex:1}
+.nav-item{position:relative}
+.nav-link{display:flex;align-items:center;gap:5px;padding:6px 12px;color:var(--nav-text);text-decoration:none;font-size:.82rem;font-weight:600;border-radius:6px;transition:.2s;cursor:pointer;background:none;border:none;font-family:'Nunito',sans-serif;white-space:nowrap}
+.nav-link:hover{background:rgba(255,255,255,.08);color:#f1f5f9}
+.nav-link svg{width:14px;height:14px;flex-shrink:0}
+.topbar-right{display:flex;align-items:center;gap:.5rem;margin-left:auto}
+
+/* Mobile menu button */
+.hamburger{display:none;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:6px;padding:6px 8px;color:#f1f5f9;cursor:pointer;font-size:1.1rem}
+@media(max-width:768px){
+  .topbar-nav{display:none}
+  .hamburger{display:flex;align-items:center;justify-content:center}
+  .topbar{padding:0 .75rem;gap:.5rem}
+  .logo-text{font-size:.9rem}
+}
+
+/* Mobile nav drawer */
+.mobile-nav{display:none;position:fixed;inset:0;z-index:9500;background:rgba(15,23,42,.7)}
+.mobile-nav.open{display:flex}
+.mobile-nav-drawer{width:280px;background:var(--nav-bg);height:100%;padding:1.5rem 1rem;display:flex;flex-direction:column;gap:.25rem;overflow-y:auto}
+.mobile-nav-close{align-self:flex-end;background:rgba(255,255,255,.1);border:none;color:#94a3b8;border-radius:6px;padding:6px 10px;cursor:pointer;font-size:1rem;margin-bottom:.75rem}
+.mobile-nav-link{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:var(--nav-text);text-decoration:none;font-size:.9rem;font-weight:700;transition:.15s;cursor:pointer;background:none;border:none;font-family:'Nunito',sans-serif;width:100%}
+.mobile-nav-link:hover{background:rgba(255,255,255,.08);color:#f1f5f9}
+.mobile-nav-divider{height:1px;background:rgba(255,255,255,.08);margin:.5rem 0}
+
+/* Currency dropdown */
+.currency-btn{display:flex;align-items:center;gap:5px;padding:5px 10px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:6px;color:#f1f5f9;font-size:.8rem;font-weight:700;cursor:pointer;font-family:'Nunito',sans-serif;transition:.2s;position:relative}
+.currency-btn:hover{background:rgba(255,255,255,.14)}
+.currency-dropdown{position:absolute;top:calc(100% + 6px);right:0;background:var(--white);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);min-width:160px;display:none;z-index:600;overflow:hidden}
+.currency-dropdown.open{display:block}
+.currency-option{display:flex;align-items:center;gap:8px;padding:9px 14px;cursor:pointer;font-size:.85rem;font-weight:600;color:var(--text2);transition:.15s}
+.currency-option:hover{background:var(--bg)}
+.currency-option.active{color:var(--primary);background:var(--primary-light)}
+
+/* Auth buttons */
+.btn-auth{padding:5px 14px;border-radius:6px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:'Nunito',sans-serif;transition:.2s;border:none}
+.btn-login{background:rgba(255,255,255,.1);color:#f1f5f9;border:1px solid rgba(255,255,255,.15)}
+.btn-login:hover{background:rgba(255,255,255,.18)}
+.btn-register{background:var(--primary);color:#fff}
+.btn-register:hover{background:var(--primary-dark)}
+@media(max-width:400px){.btn-auth{padding:5px 8px;font-size:.75rem}}
+
+/* User chip */
+.user-chip{display:flex;align-items:center;gap:6px;padding:4px 10px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:20px;color:#f1f5f9;font-size:.8rem;font-weight:700;cursor:pointer;transition:.2s}
+.user-chip:hover{background:rgba(255,255,255,.14)}
+.user-avatar{width:22px;height:22px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:800;color:#fff;flex-shrink:0}
+@media(max-width:480px){
+  .user-chip span.chip-name{display:none}
+  .currency-btn span:first-child{display:none}
+}
+
+/* ===== SUB NAV ===== */
+.subnav{background:var(--white);border-bottom:1px solid var(--border);padding:0 1rem;display:flex;gap:0;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.subnav-link{padding:11px 16px;font-size:.83rem;font-weight:700;color:var(--muted);text-decoration:none;border-bottom:2px solid transparent;white-space:nowrap;transition:.2s;display:flex;align-items:center;gap:6px}
+.subnav-link:hover{color:var(--primary)}
+.subnav-link.active{color:var(--primary);border-bottom-color:var(--primary)}
+.subnav-link svg{width:15px;height:15px}
+
+/* ===== BREADCRUMB ===== */
+.breadcrumb{padding:.6rem 1.25rem;font-size:.78rem;color:var(--muted);background:var(--bg);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.breadcrumb a{color:var(--primary);text-decoration:none;font-weight:600}
+.breadcrumb span{color:var(--muted2)}
+
+/* ===== MAIN LAYOUT ===== */
+.main{max-width:1100px;margin:24px auto;padding:0 1rem;display:grid;grid-template-columns:1fr 300px;gap:20px;align-items:start}
+@media(max-width:768px){.main{grid-template-columns:1fr;padding:0 .75rem;margin:16px auto}.sidebar-col{order:-1}}
+
+/* ===== SERVICE CARD ===== */
+.service-card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.service-body{padding:1.5rem}
+@media(max-width:480px){.service-body{padding:1rem}}
+.service-title{font-size:1.1rem;font-weight:800;color:var(--text);margin-bottom:1.25rem;line-height:1.4}
+@media(max-width:480px){.service-title{font-size:.95rem}}
+
+.service-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:1.5rem}
+.meta-box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.7rem .75rem;text-align:center}
+.meta-label{font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.meta-value{font-size:1rem;font-weight:800;color:var(--text)}
+@media(max-width:360px){.meta-value{font-size:.88rem}}
+.meta-value.price{color:var(--primary)}
+.meta-value.online{color:var(--success)}
+
+/* Form */
+.form-group{margin-bottom:1rem}
+.form-label{display:block;font-size:.82rem;font-weight:700;color:var(--text2);margin-bottom:.4rem}
+.form-label span{color:var(--danger)}
+.form-input{width:100%;padding:.6rem .85rem;border:1.5px solid var(--border2);border-radius:8px;font-family:'Nunito',sans-serif;font-size:.88rem;font-weight:600;color:var(--text);background:var(--white);outline:none;transition:.2s}
+.form-input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(59,130,246,.1)}
+.form-input::placeholder{color:var(--muted2);font-weight:500}
+
+/* Upload */
+.upload-area{border:2px dashed var(--border2);border-radius:8px;padding:1.5rem;text-align:center;cursor:pointer;transition:.2s;position:relative;background:var(--bg)}
+.upload-area:hover{border-color:var(--primary);background:#eff6ff}
+.upload-area input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.upload-icon{font-size:1.8rem;margin-bottom:.4rem}
+.upload-text{font-size:.82rem;font-weight:700;color:var(--muted)}
+.upload-sub{font-size:.75rem;color:var(--muted2);margin-top:3px}
+.upload-preview{display:none;position:relative}
+.upload-preview img{width:100%;max-height:160px;object-fit:contain;border-radius:6px}
+.upload-remove{position:absolute;top:6px;right:6px;width:24px;height:24px;background:rgba(239,68,68,.9);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:.9rem;cursor:pointer;border:none}
+
+/* Checkbox */
+.check-row{display:flex;align-items:flex-start;gap:8px;margin-bottom:1.25rem}
+.check-row input[type=checkbox]{width:16px;height:16px;margin-top:2px;accent-color:var(--primary);cursor:pointer;flex-shrink:0}
+.check-row label{font-size:.82rem;color:var(--muted);cursor:pointer;line-height:1.5}
+.check-row a{color:var(--primary);font-weight:700}
+
+/* Order button */
+.btn-order{width:100%;padding:.8rem;background:var(--primary);color:#fff;border:none;border-radius:8px;font-family:'Nunito',sans-serif;font-size:.95rem;font-weight:800;cursor:pointer;transition:.2s;display:flex;align-items:center;justify-content:center;gap:8px;letter-spacing:.2px}
+.btn-order:hover{background:var(--primary-dark);transform:translateY(-1px);box-shadow:0 4px 12px rgba(59,130,246,.3)}
+.btn-order:active{transform:translateY(0)}
+.btn-order:disabled{background:var(--muted2);cursor:not-allowed;transform:none;box-shadow:none}
+.btn-spinner{display:none;width:16px;height:16px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Guarantee */
+.guarantee-box{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:1rem 1.1rem;margin-top:1.25rem}
+.guarantee-title{font-size:.8rem;font-weight:800;color:#059669;text-transform:uppercase;letter-spacing:.5px;margin-bottom:.6rem;display:flex;align-items:center;gap:6px}
+.guarantee-list{list-style:none;display:flex;flex-direction:column;gap:.35rem}
+.guarantee-list li{font-size:.8rem;color:#065f46;display:flex;align-items:flex-start;gap:7px;font-weight:600}
+.guarantee-list li::before{content:'✓';color:#10b981;font-weight:800;flex-shrink:0}
+
+/* Balance notice */
+.balance-notice{background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:.85rem 1rem;margin-bottom:1rem;font-size:.82rem;font-weight:700;color:#1e40af;display:flex;align-items:center;gap:.6rem}
+
+/* Related Services */
+.section-title{font-size:.88rem;font-weight:800;color:var(--text);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem;padding-bottom:.5rem;border-bottom:2px solid var(--border);display:flex;align-items:center;gap:6px}
+.related-list{display:flex;flex-direction:column;gap:.5rem;margin-bottom:1.5rem}
+.related-item{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:.75rem 1rem;display:flex;align-items:center;gap:.75rem;text-decoration:none;transition:.2s}
+.related-item:hover{border-color:var(--primary);background:#eff6ff;transform:translateX(2px)}
+.related-icon{width:36px;height:36px;flex-shrink:0;background:var(--primary-light);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1rem}
+.related-info{flex:1;min-width:0}
+.related-name{font-size:.8rem;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;margin-bottom:2px}
+.related-price{font-size:.78rem;font-weight:800;color:var(--primary)}
+.related-delay{font-size:.72rem;color:var(--muted2);font-weight:600}
+
+/* Sidebar */
+.features-card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px}
+.features-list{list-style:none}
+.feature-item{display:flex;align-items:center;gap:12px;padding:.9rem 1.1rem;border-bottom:1px solid var(--border);transition:.15s}
+.feature-item:last-child{border-bottom:none}
+.feature-item:hover{background:var(--bg)}
+.feat-icon{width:36px;height:36px;flex-shrink:0;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+.feat-icon.blue{background:#dbeafe}.feat-icon.green{background:#dcfce7}.feat-icon.yellow{background:#fef9c3}.feat-icon.purple{background:#ede9fe}
+.feat-text strong{display:block;font-size:.82rem;font-weight:800;color:var(--text)}
+.feat-text span{font-size:.75rem;color:var(--muted);font-weight:600}
+
+.contact-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1.1rem;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px}
+.contact-title{font-size:.8rem;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.85rem}
+.contact-row{display:flex;align-items:flex-start;gap:9px;margin-bottom:.65rem;font-size:.8rem}
+.contact-row:last-child{margin-bottom:0}
+.contact-ico{width:28px;height:28px;flex-shrink:0;background:var(--bg);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:.9rem}
+.contact-text strong{display:block;font-weight:800;color:var(--text);line-height:1.3}
+.contact-text span{color:var(--muted);font-weight:600;font-size:.75rem}
+.contact-text a{color:var(--primary);text-decoration:none;font-weight:700}
+.contact-text a:hover{text-decoration:underline}
+.social-row{display:flex;gap:8px;margin-top:.85rem}
+.social-btn{flex:1;padding:.45rem;border-radius:7px;border:1px solid var(--border);background:var(--bg);display:flex;align-items:center;justify-content:center;gap:5px;font-size:.75rem;font-weight:700;color:var(--text2);text-decoration:none;cursor:pointer;transition:.2s}
+.social-btn:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-light)}
+
+/* Footer */
+footer{background:var(--nav-bg);margin-top:3rem;padding:2.5rem 1rem 1.5rem}
+.footer-grid{max-width:1100px;margin:auto;display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:2rem;margin-bottom:2rem}
+@media(max-width:768px){.footer-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:480px){.footer-grid{grid-template-columns:1fr}}
+.footer-brand .logo-text{font-size:1rem;color:#f1f5f9;display:block;margin-bottom:.5rem}
+.footer-brand p{font-size:.78rem;color:#94a3b8;line-height:1.6;margin-bottom:1rem}
+.footer-col h4{font-size:.78rem;font-weight:800;color:#cbd5e1;text-transform:uppercase;letter-spacing:.5px;margin-bottom:.85rem}
+.footer-links{list-style:none;display:flex;flex-direction:column;gap:.4rem}
+.footer-links a{font-size:.8rem;color:#94a3b8;text-decoration:none;font-weight:600;transition:.15s}
+.footer-links a:hover{color:#f1f5f9}
+.footer-bottom{max-width:1100px;margin:auto;border-top:1px solid rgba(255,255,255,.08);padding-top:1rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+.footer-copy{font-size:.75rem;color:#64748b}
+.footer-copy a{color:#94a3b8;text-decoration:none}
+.app-btns{display:flex;gap:.5rem}
+.app-btn{padding:.4rem .9rem;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:6px;color:#cbd5e1;font-size:.72rem;font-weight:700;text-decoration:none;cursor:pointer;display:flex;align-items:center;gap:5px;transition:.2s}
+.app-btn:hover{background:rgba(255,255,255,.12);color:#f1f5f9}
+
+/* ===== MODAL BASE ===== */
+.modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,.6);backdrop-filter:blur(4px);z-index:9000;display:flex;align-items:center;justify-content:center;padding:1rem;opacity:0;pointer-events:none;transition:.25s}
+.modal-overlay.open{opacity:1;pointer-events:all}
+.modal-box{background:var(--white);border-radius:14px;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden;transform:translateY(12px) scale(.98);transition:.25s;max-height:92vh;overflow-y:auto}
+.modal-overlay.open .modal-box{transform:translateY(0) scale(1)}
+.modal-header{background:var(--nav-bg);padding:1rem 1.25rem;display:flex;align-items:center;justify-content:space-between}
+.modal-header-title{font-size:.95rem;font-weight:800;color:#f1f5f9}
+.modal-close{width:28px;height:28px;background:rgba(255,255,255,.1);border:none;border-radius:6px;color:#94a3b8;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;transition:.2s}
+.modal-close:hover{background:rgba(255,255,255,.18);color:#f1f5f9}
+
+/* Auth tabs */
+.auth-tabs{display:flex;border-bottom:1px solid var(--border);background:var(--bg)}
+.auth-tab{flex:1;padding:.75rem;font-family:'Nunito',sans-serif;font-size:.85rem;font-weight:800;color:var(--muted);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:.2s}
+.auth-tab.active{color:var(--primary);border-bottom-color:var(--primary);background:var(--white)}
+.modal-body{padding:1.25rem}
+.modal-body .form-group{margin-bottom:.85rem}
+.modal-body .form-input{font-size:.85rem}
+
+.btn-submit{width:100%;padding:.7rem;background:var(--primary);color:#fff;border:none;border-radius:8px;font-family:'Nunito',sans-serif;font-size:.9rem;font-weight:800;cursor:pointer;transition:.2s;margin-top:.25rem}
+.btn-submit:hover{background:var(--primary-dark)}
+.btn-submit:disabled{background:var(--muted2);cursor:not-allowed}
+.form-footer{text-align:center;margin-top:.85rem;font-size:.78rem;color:var(--muted);font-weight:600}
+.form-footer a{color:var(--primary);text-decoration:none;font-weight:800}
+.form-divider{text-align:center;font-size:.75rem;color:var(--muted2);margin:.5rem 0;position:relative}
+.form-divider::before,.form-divider::after{content:'';position:absolute;top:50%;width:43%;height:1px;background:var(--border)}
+.form-divider::before{left:0}.form-divider::after{right:0}
+.currency-select{width:100%;padding:.6rem .85rem;border:1.5px solid var(--border2);border-radius:8px;font-family:'Nunito',sans-serif;font-size:.88rem;font-weight:600;color:var(--text);background:var(--white);outline:none;cursor:pointer}
+.currency-select:focus{border-color:var(--primary)}
+
+/* Dropdown */
+.dropdown-menu{display:none;position:absolute;top:100%;left:0;background:var(--white);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);min-width:200px;z-index:600;overflow:hidden;padding:.35rem 0}
+.dropdown-menu.open{display:block}
+.dropdown-item{display:flex;padding:9px 16px;font-size:.83rem;font-weight:700;color:var(--text2);text-decoration:none;transition:.15s;align-items:center;gap:7px}
+.dropdown-item:hover{background:var(--bg);color:var(--primary)}
+
+/* Toast */
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;background:var(--text);color:#fff;padding:.8rem 1.2rem;border-radius:10px;font-size:.85rem;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,.2);display:flex;align-items:center;gap:.6rem;z-index:9999;transform:translateY(10px);opacity:0;transition:.3s;pointer-events:none;max-width:320px}
+.toast.show{transform:translateY(0);opacity:1}
+.toast.success{background:#059669}
+.toast.error{background:var(--danger)}
+@media(max-width:480px){.toast{left:1rem;right:1rem;bottom:1rem}}
+
+/* Badge */
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.7rem;font-weight:800;letter-spacing:.3px}
+.badge-success{background:#dcfce7;color:#059669}
+.badge-primary{background:var(--primary-light);color:var(--primary)}
+.badge-warning{background:#fef9c3;color:#b45309}
+
+/* Alert */
+.alert{padding:.75rem 1rem;border-radius:8px;font-size:.82rem;font-weight:700;margin-bottom:1rem;display:flex;align-items:flex-start;gap:.6rem}
+.alert-warning{background:#fefce8;border:1px solid #fde68a;color:#92400e}
+.alert-info{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af}
+
+/* ===== PROFILE MODAL ===== */
+.profile-modal-box{max-width:500px}
+.profile-header-card{background:linear-gradient(135deg,#1e3a5f,#0f2440);padding:1.5rem;text-align:center}
+.profile-avatar-big{width:70px;height:70px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center;font-size:1.8rem;font-weight:800;color:#fff;margin:0 auto .75rem}
+.profile-name{font-size:1.1rem;font-weight:800;color:#f1f5f9;margin-bottom:.25rem}
+.profile-email{font-size:.8rem;color:#94a3b8;font-weight:600}
+.profile-balance-card{margin:1.25rem;background:linear-gradient(135deg,#3b82f6,#1d4ed8);border-radius:12px;padding:1.25rem;text-align:center;color:#fff}
+.profile-balance-label{font-size:.75rem;font-weight:700;opacity:.8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:.35rem}
+.profile-balance-amount{font-size:1.8rem;font-weight:800;margin-bottom:.85rem}
+.btn-recharge{background:#fff;color:var(--primary);border:none;border-radius:8px;padding:.55rem 1.25rem;font-family:'Nunito',sans-serif;font-size:.85rem;font-weight:800;cursor:pointer;transition:.2s}
+.btn-recharge:hover{background:#eff6ff}
+.profile-tabs{display:flex;border-bottom:1px solid var(--border);background:var(--bg);margin:0 0 0 0}
+.profile-tab{flex:1;padding:.7rem;font-family:'Nunito',sans-serif;font-size:.82rem;font-weight:800;color:var(--muted);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:.2s}
+.profile-tab.active{color:var(--primary);border-bottom-color:var(--primary);background:var(--white)}
+.profile-tab-panel{display:none;padding:1rem}
+.profile-tab-panel.active{display:block}
+
+/* Orders History */
+.order-item{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.85rem 1rem;margin-bottom:.6rem}
+.order-item-header{display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap}
+.order-service{font-size:.82rem;font-weight:800;color:var(--text);flex:1;min-width:0}
+.order-badge{font-size:.72rem;font-weight:800;padding:3px 10px;border-radius:999px;white-space:nowrap}
+.order-item-meta{display:flex;flex-direction:column;gap:.3rem;font-size:.78rem;color:var(--muted);font-weight:600}
+.order-item-meta span strong{color:var(--text2)}
+
+/* Logout button */
+.btn-logout{width:calc(100% - 2.5rem);margin:0 1.25rem 1.25rem;padding:.65rem;background:#fef2f2;color:#dc2626;border:1px solid #fecaca;border-radius:8px;font-family:'Nunito',sans-serif;font-size:.88rem;font-weight:800;cursor:pointer;transition:.2s;display:flex;align-items:center;justify-content:center;gap:.5rem}
+.btn-logout:hover{background:#fee2e2}
+
+/* Recharge Modal */
+.recharge-info{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:.85rem 1rem;margin-bottom:1rem;font-size:.82rem;font-weight:600;color:#92400e;line-height:1.6}
+.recharge-info strong{color:#b45309}
+.wallet-address{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:.5rem .75rem;font-size:.8rem;font-weight:700;color:var(--text);word-break:break-all;margin-top:.35rem;cursor:pointer;transition:.15s}
+.wallet-address:hover{border-color:var(--primary);background:var(--primary-light)}
+</style>
+</head>
+<body>
+
+<!-- ===== TOPBAR ===== -->
+<header class="topbar">
+  <a class="topbar-logo" href="#">
+    <span class="logo-text">🔓 Tecno MDM</span>
+  </a>
+  <nav class="topbar-nav">
+    <div class="nav-item">
+      <a class="nav-link" href="#">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+        Home
+      </a>
+    </div>
+    <div class="nav-item" id="serviceDropItem">
+      <button class="nav-link" onclick="toggleDropdown('serviceMenu')">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+        Service List
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:12px;height:12px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+      </button>
+      <div class="dropdown-menu" id="serviceMenu">
+        <a class="dropdown-item" href="#"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>IMEI Service</a>
+        <a class="dropdown-item" href="#"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>Server Service</a>
+        <a class="dropdown-item" href="#"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>Service By Group</a>
+      </div>
+    </div>
+    <div class="nav-item"><a class="nav-link" href="#">OplusPro</a></div>
+    <div class="nav-item"><a class="nav-link" href="#">Tool Rent</a></div>
+  </nav>
+  <div class="topbar-right">
+    <!-- Currency -->
+    <div style="position:relative" id="currWrap">
+      <button class="currency-btn" onclick="toggleDropdown('currMenu')">
+        <span id="currLabel">USD</span>
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:11px;height:11px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+      </button>
+      <div class="currency-dropdown" id="currMenu">
+        <div class="currency-option" onclick="setCurrency('BDT')"><span>🇧🇩</span> BDT — Taka</div>
+        <div class="currency-option active" onclick="setCurrency('USD')"><span>🇺🇸</span> USD — Dollar</div>
+      </div>
+    </div>
+    <!-- Auth / User -->
+    <div id="authBtns" style="display:flex;gap:6px">
+      <button class="btn-auth btn-login" onclick="openAuth('login')">Login</button>
+      <button class="btn-auth btn-register" onclick="openAuth('register')">Register</button>
+    </div>
+    <div id="userChip" style="display:none">
+      <div class="user-chip" onclick="openProfile()">
+        <div class="user-avatar" id="userInitial">U</div>
+        <span class="chip-name" id="userName">User</span>
+        <span class="user-balance-display" style="font-size:.72rem;background:rgba(16,185,129,.15);color:#10b981;padding:2px 7px;border-radius:999px;font-weight:800">0.00 USDT</span>
+      </div>
+    </div>
+    <!-- Hamburger -->
+    <button class="hamburger" onclick="openMobileNav()">☰</button>
+  </div>
+</header>
+
+<!-- Mobile Nav Drawer -->
+<div class="mobile-nav" id="mobileNav" onclick="if(event.target===this)closeMobileNav()">
+  <div class="mobile-nav-drawer">
+    <button class="mobile-nav-close" onclick="closeMobileNav()">✕ Fermer</button>
+    <a class="mobile-nav-link" href="#">🏠 Home</a>
+    <a class="mobile-nav-link" href="#">📱 IMEI Service</a>
+    <a class="mobile-nav-link" href="#">🖥️ Server Service</a>
+    <a class="mobile-nav-link" href="#">📦 Service By Group</a>
+    <a class="mobile-nav-link" href="#">🔧 OplusPro</a>
+    <a class="mobile-nav-link" href="#">🛠️ Tool Rent</a>
+    <div class="mobile-nav-divider"></div>
+    <button class="mobile-nav-link" id="mobileProfileBtn" style="display:none" onclick="closeMobileNav();openProfile()">👤 Mon Profil</button>
+    <button class="mobile-nav-link" id="mobileLoginBtn" onclick="closeMobileNav();openAuth('login')">🔐 Se connecter</button>
+    <button class="mobile-nav-link" id="mobileRegisterBtn" onclick="closeMobileNav();openAuth('register')">✍️ S'inscrire</button>
+  </div>
+</div>
+
+<!-- ===== SUB NAV ===== -->
+<div class="subnav">
+  <a class="subnav-link active" href="#">
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+    IMEI Service
+  </a>
+  <a class="subnav-link" href="#">
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
+    Server Service
+  </a>
+  <a class="subnav-link" href="#">
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+    Service By Group
+  </a>
+</div>
+
+<!-- ===== BREADCRUMB ===== -->
+<div class="breadcrumb">
+  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:13px;height:13px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+  <a href="#">Home</a><span>›</span><a href="#">IMEI</a><span>›</span><span>Passer une commande</span>
+</div>
+
+<!-- ===== MAIN ===== -->
+<div class="main">
+  <!-- LEFT -->
+  <div>
+    <div class="service-card">
+      <div style="background:linear-gradient(135deg,#1e3a5f 0%,#0f2440 100%);padding:2rem;text-align:center;position:relative;overflow:hidden">
+        <div style="position:absolute;inset:0;background:radial-gradient(circle at 30% 50%,rgba(59,130,246,.2),transparent 60%)"></div>
+        <div style="position:relative;z-index:1">
+          <div style="font-size:3.5rem;margin-bottom:.75rem">🔓</div>
+          <div style="font-size:.75rem;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:.4rem">Official Service</div>
+          <div style="font-size:1.1rem;font-weight:800;color:#f1f5f9;line-height:1.4">Tecno · Itel · Infinix<br>MDM Unlock By IMEI</div>
+          <div style="margin-top:.75rem;display:flex;gap:.5rem;justify-content:center;flex-wrap:wrap">
+            <span class="badge badge-success">Lundi à Vendredi</span>
+            <span class="badge badge-primary">Officiel</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="service-body">
+        <h1 class="service-title">Tecno, Itel, Infinix MDM Official Unlock By IMEI (Lundi à Vendredi)</h1>
+
+        <div class="service-meta">
+          <div class="meta-box">
+            <div class="meta-label">Prix</div>
+            <div class="meta-value price" id="displayPrice">10 USDT</div>
+          </div>
+          <div class="meta-box">
+            <div class="meta-label">Délai</div>
+            <div class="meta-value">1-24 Heures</div>
+          </div>
+          <div class="meta-box">
+            <div class="meta-label">Statut</div>
+            <div class="meta-value online">● En ligne</div>
+          </div>
+        </div>
+
+        <!-- Login alert -->
+        <div class="alert alert-warning" id="loginAlert">
+          <span>⚠️</span>
+          <span>Vous devez <strong><a href="#" onclick="openAuth('login');return false" style="color:#92400e;text-decoration:underline">vous connecter</a></strong> ou <strong><a href="#" onclick="openAuth('register');return false" style="color:#92400e;text-decoration:underline">créer un compte</a></strong> pour passer une commande.</span>
+        </div>
+
+        <!-- Balance notice (shown when logged in) -->
+        <div class="balance-notice" id="balanceNotice" style="display:none">
+          💰 Votre solde : <strong class="user-balance-display">0.00 USDT</strong> — Chaque commande coûte <strong>10 USDT</strong>. <a href="#" onclick="openProfile();return false" style="color:var(--primary);font-weight:800">Recharger</a>
+        </div>
+
+        <!-- Order Form -->
+        <div id="orderFormWrap" style="opacity:.6;pointer-events:none">
+          <div class="form-group">
+            <label class="form-label">Entrez l'<strong>IMEI</strong> <span>*</span></label>
+            <input type="text" class="form-input" id="imeiInput" placeholder="Numéro IMEI (15 chiffres)" maxlength="15" inputmode="numeric" oninput="this.value=this.value.replace(/\D/g,'')">
+            <div style="font-size:.72rem;color:var(--muted2);margin-top:4px;font-weight:600">💡 Composez <strong>*#06#</strong> pour obtenir votre IMEI</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Photo de l'<strong>écran de verrouillage</strong> <span>*</span></label>
+            <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+              <input type="file" id="fileInput" accept="image/*" onchange="handleFileUpload(this)">
+              <div id="uploadPlaceholder">
+                <div class="upload-icon">📸</div>
+                <div class="upload-text">Cliquez pour télécharger</div>
+                <div class="upload-sub">PNG, JPG jusqu'à 5MB</div>
+              </div>
+              <div class="upload-preview" id="uploadPreview">
+                <img id="previewImg" src="" alt="Lock screen">
+                <button class="upload-remove" onclick="removeImage(event)">✕</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="check-row">
+            <input type="checkbox" id="termsCheck">
+            <label for="termsCheck">J'accepte les <a href="#">conditions d'utilisation</a> et confirme que 10 USDT seront débités de mon solde.</label>
+          </div>
+
+          <button class="btn-order" id="orderBtn" onclick="placeOrder()" disabled>
+            <span id="btnText">PASSER UNE COMMANDE — 10 USDT</span>
+            <div class="btn-spinner" id="btnSpinner"></div>
+          </button>
+
+          <div class="guarantee-box">
+            <div class="guarantee-title"><span>🛡️</span> Garantie Service</div>
+            <ul class="guarantee-list">
+              <li>Fonctionne les jours ouvrables uniquement</li>
+              <li>Remboursement si le service ne fonctionne pas</li>
+              <li>Aucune annulation autorisée</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Related Services -->
+    <div style="margin-top:20px">
+      <div class="section-title">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:16px;height:16px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+        SERVICES CONNEXES
+      </div>
+      <div class="related-list">
+        <a class="related-item" href="#">
+          <div class="related-icon">📱</div>
+          <div class="related-info">
+            <div class="related-name">iRemoval Pro A12 Edition V.5.2.1 iOS18.6 - iOS 26.0.1 - Without Signal</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
+              <span class="related-price">7.75 USD</span><span class="related-delay">⚡ Minutes</span>
+            </div>
+          </div>
+        </a>
+        <a class="related-item" href="#">
+          <div class="related-icon">🔐</div>
+          <div class="related-info">
+            <div class="related-name">HFZ Activator A12 Premium Bypass - iOS18.6 - iOS 26.0.1 - Without Signal</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
+              <span class="related-price">5.20 USD</span><span class="related-delay">⚡ Minutes</span>
+            </div>
+          </div>
+        </a>
+        <a class="related-item" href="#">
+          <div class="related-icon">🛠️</div>
+          <div class="related-info">
+            <div class="related-name">Rent - Unlock Tool Rent For 6 Hours</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
+              <span class="related-price">1.02 USD</span><span class="related-delay">⚡ Instant</span>
+            </div>
+          </div>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT SIDEBAR -->
+  <div class="sidebar-col">
+    <div class="features-card">
+      <ul class="features-list">
+        <li class="feature-item">
+          <div class="feat-icon blue">⚡</div>
+          <div class="feat-text"><strong>Livraison Rapide</strong><span>Résultats en quelques heures</span></div>
+        </li>
+        <li class="feature-item">
+          <div class="feat-icon green">🔒</div>
+          <div class="feat-text"><strong>100% Sécurisé</strong><span>Plateforme chiffrée SSL</span></div>
+        </li>
+        <li class="feature-item">
+          <div class="feat-icon yellow">💬</div>
+          <div class="feat-text"><strong>Support 24/7</strong><span>Toujours là pour vous aider</span></div>
+        </li>
+        <li class="feature-item">
+          <div class="feat-icon purple">💳</div>
+          <div class="feat-text"><strong>Rechargement Facile</strong><span>USDT (TRC20), Binance & plus</span></div>
+        </li>
+      </ul>
+    </div>
+
+    <div class="contact-card">
+      <div class="contact-title">Contact</div>
+      <div class="contact-row">
+        <div class="contact-ico">✉️</div>
+        <div class="contact-text"><strong><a href="mailto:support@tecnomdm.com">support@tecnomdm.com</a></strong><span>Support Email</span></div>
+      </div>
+      <div class="contact-row">
+        <div class="contact-ico">💬</div>
+        <div class="contact-text"><strong><a href="https://wa.me/8801314355527">wa.me/+8801314355527</a></strong><span>WhatsApp</span></div>
+      </div>
+      <div class="contact-row">
+        <div class="contact-ico">🕐</div>
+        <div class="contact-text"><strong>Lun – Ven, 9h – 23h GMT</strong><span>Heures d'ouverture</span></div>
+      </div>
+      <div class="social-row">
+        <a class="social-btn" href="https://www.facebook.com/gsmmanagerteam/"><span>📘</span> Facebook</a>
+        <a class="social-btn" href="https://www.youtube.com/channel/UCAKzlhENRQu11Mj9dF70l0A"><span>▶️</span> YouTube</a>
+      </div>
+    </div>
+
+    <div class="contact-card">
+      <div class="contact-title">Entreprise</div>
+      <ul style="list-style:none;display:flex;flex-direction:column;gap:.35rem">
+        <li><a href="#" style="font-size:.82rem;color:var(--primary);text-decoration:none;font-weight:700;display:flex;align-items:center;gap:5px">🏠 Accueil</a></li>
+        <li><a href="#" style="font-size:.82rem;color:var(--text2);text-decoration:none;font-weight:600;display:flex;align-items:center;gap:5px">ℹ️ À propos</a></li>
+        <li><a href="#" style="font-size:.82rem;color:var(--text2);text-decoration:none;font-weight:600;display:flex;align-items:center;gap:5px">📞 Contactez-nous</a></li>
+        <li><a href="#" style="font-size:.82rem;color:var(--text2);text-decoration:none;font-weight:600;display:flex;align-items:center;gap:5px">🤝 Panel Revendeur</a></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ===== FOOTER ===== -->
+<footer>
+  <div class="footer-grid">
+    <div class="footer-brand">
+      <span class="logo-text">🔓 Tecno MDM</span>
+      <p>Service professionnel de déverrouillage MDM pour appareils Tecno, Itel et Infinix. Rapide, sécurisé et garanti.</p>
+      <div class="app-btns">
+        <a class="app-btn" href="#"><span>🍎</span><span><span style="display:block;font-size:.65rem;opacity:.7">Download on the</span><strong>App Store</strong></span></a>
+        <a class="app-btn" href="#"><span>🤖</span><span><span style="display:block;font-size:.65rem;opacity:.7">Get it on</span><strong>Google Play</strong></span></a>
+      </div>
+    </div>
+    <div class="footer-col">
+      <h4>Accès Rapide</h4>
+      <ul class="footer-links">
+        <li><a href="#">Service IMEI</a></li><li><a href="#">Service Serveur</a></li>
+        <li><a href="#">Service Distant</a></li><li><a href="#">Par Groupe</a></li>
+      </ul>
+    </div>
+    <div class="footer-col">
+      <h4>Entreprise</h4>
+      <ul class="footer-links">
+        <li><a href="#">Accueil</a></li><li><a href="#">À propos</a></li>
+        <li><a href="#">Contactez-nous</a></li><li><a href="#">Revendeur</a></li>
+      </ul>
+    </div>
+    <div class="footer-col">
+      <h4>Légal</h4>
+      <ul class="footer-links">
+        <li><a href="#">Politique de confidentialité</a></li>
+        <li><a href="#">Conditions d'utilisation</a></li>
+        <li><a href="#">Politique de livraison</a></li>
+        <li><a href="#">Politique de remboursement</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span class="footer-copy">© 2026 Tecno MDM. Powered by <a href="#">GSM Theme</a></span>
+    <span class="footer-copy">Fait avec ❤️ pour les professionnels GSM</span>
+  </div>
+</footer>
+
+<!-- ===== AUTH MODAL ===== -->
+<div class="modal-overlay" id="authModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-header-title">🔐 Connexion / Inscription</span>
+      <button class="modal-close" onclick="closeAuth()">✕</button>
+    </div>
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tabLogin" onclick="switchAuthTab('login')">Se connecter</button>
+      <button class="auth-tab" id="tabRegister" onclick="switchAuthTab('register')">S'inscrire</button>
+    </div>
+
+    <!-- LOGIN -->
+    <div class="modal-body" id="panelLogin">
+      <div class="form-group">
+        <label class="form-label">Votre Email</label>
+        <input type="email" class="form-input" id="loginEmail" placeholder="email@exemple.com" inputmode="email">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Votre Mot de passe</label>
+        <input type="password" class="form-input" id="loginPass" placeholder="••••••••">
+      </div>
+      <button class="btn-submit" id="loginBtn" onclick="doLogin()">Se connecter</button>
+      <div class="form-footer" style="margin-top:.75rem"><a href="#" onclick="showForgot();return false">Mot de passe oublié ?</a></div>
+      <div class="form-divider" style="margin-top:.75rem">ou</div>
+      <div class="form-footer">Pas encore de compte ? <a href="#" onclick="switchAuthTab('register');return false">S'inscrire</a></div>
+    </div>
+
+    <!-- REGISTER -->
+    <div class="modal-body" id="panelRegister" style="display:none">
+      <div class="form-group">
+        <label class="form-label">Votre Nom <span style="color:var(--danger)">*</span></label>
+        <input type="text" class="form-input" id="regName" placeholder="Nom complet">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Votre Email <span style="color:var(--danger)">*</span></label>
+        <input type="email" class="form-input" id="regEmail" placeholder="email@exemple.com" inputmode="email">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Votre Mobile</label>
+        <input type="tel" class="form-input" id="regMobile" placeholder="+237 000 000 000" inputmode="tel">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Mot de passe <span style="color:var(--danger)">*</span></label>
+        <input type="password" class="form-input" id="regPass" placeholder="Min. 6 caractères">
+      </div>
+      <button class="btn-submit" id="regBtn" onclick="doRegister()">S'inscrire</button>
+      <div class="form-divider" style="margin-top:.75rem">ou</div>
+      <div class="form-footer">Déjà un compte ? <a href="#" onclick="switchAuthTab('login');return false">Se connecter</a></div>
+    </div>
+
+    <!-- FORGOT -->
+    <div class="modal-body" id="panelForgot" style="display:none">
+      <div style="margin-bottom:.75rem">
+        <button onclick="showLogin()" style="background:none;border:none;color:var(--primary);font-size:.82rem;font-weight:700;cursor:pointer;font-family:'Nunito',sans-serif;padding:0">← Retour</button>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Votre Email</label>
+        <input type="email" class="form-input" id="forgotEmail" placeholder="email@exemple.com" inputmode="email">
+      </div>
+      <button class="btn-submit" onclick="doResetPassword()">Réinitialiser le mot de passe</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== PROFILE MODAL ===== -->
+<div class="modal-overlay" id="profileModal">
+  <div class="modal-box profile-modal-box">
+    <div class="modal-header">
+      <span class="modal-header-title">👤 Mon Profil</span>
+      <button class="modal-close" onclick="closeProfile()">✕</button>
+    </div>
+
+    <div class="profile-header-card">
+      <div class="profile-avatar-big" id="profileInitial">U</div>
+      <div class="profile-name" id="profileName">Utilisateur</div>
+      <div class="profile-email" id="profileEmail">email@exemple.com</div>
+    </div>
+
+    <!-- Balance Card -->
+    <div class="profile-balance-card">
+      <div class="profile-balance-label">💰 Solde USDT</div>
+      <div class="profile-balance-amount user-balance-display">0.00 USDT</div>
+      <button class="btn-recharge" onclick="openRechargeModal()">🔄 Recharger mon compte</button>
+    </div>
+
+    <!-- Profile Tabs -->
+    <div class="profile-tabs">
+      <button class="profile-tab active" onclick="switchProfileTab('orders')">📋 Commandes</button>
+      <button class="profile-tab" onclick="switchProfileTab('info')">⚙️ Informations</button>
+    </div>
+
+    <div class="profile-tab-panel active" id="ptOrders">
+      <div id="orderHistoryList">
+        <div style="text-align:center;padding:2rem;color:var(--muted);font-size:.85rem;">Aucune commande pour l'instant</div>
+      </div>
+    </div>
+
+    <div class="profile-tab-panel" id="ptInfo">
+      <div style="display:flex;flex-direction:column;gap:.75rem;font-size:.85rem;font-weight:600;color:var(--text2)">
+        <div style="background:var(--bg);border-radius:8px;padding:.85rem 1rem">
+          <div style="font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:.25rem">Nom</div>
+          <div id="infoName">—</div>
+        </div>
+        <div style="background:var(--bg);border-radius:8px;padding:.85rem 1rem">
+          <div style="font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:.25rem">Email</div>
+          <div id="infoEmail">—</div>
+        </div>
+        <div style="background:var(--bg);border-radius:8px;padding:.85rem 1rem">
+          <div style="font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:.25rem">Statut du compte</div>
+          <div style="color:var(--success);font-weight:800">✅ Actif</div>
+        </div>
+      </div>
+    </div>
+
+    <button class="btn-logout" onclick="doLogout()">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:16px;height:16px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+      Se déconnecter
+    </button>
+  </div>
+</div>
+
+<!-- ===== RECHARGE MODAL ===== -->
+<div class="modal-overlay" id="rechargeModal">
+  <div class="modal-box" style="max-width:420px">
+    <div class="modal-header">
+      <span class="modal-header-title">💰 Recharger mon compte</span>
+      <button class="modal-close" onclick="closeRechargeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="recharge-info">
+        <strong>🪙 Paiement en USDT (TRC20)</strong><br>
+        Envoyez vos USDT à l'adresse suivante, puis entrez le montant et le TXID de votre transaction.<br><br>
+        <strong>Adresse portefeuille USDT (TRC20) :</strong>
+        <div class="wallet-address" onclick="copyWallet()" title="Cliquer pour copier">
+          TRX7kQpXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+        </div>
+        <div style="font-size:.72rem;margin-top:.35rem;color:#b45309">👆 Cliquez pour copier l'adresse</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Montant envoyé (USDT) <span style="color:var(--danger)">*</span></label>
+        <input type="number" class="form-input" id="rechargeAmount" placeholder="ex: 20" min="5" step="1" inputmode="numeric">
+        <div style="font-size:.72rem;color:var(--muted2);margin-top:4px;font-weight:600">Minimum : 5 USDT</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">TXID de la transaction <span style="color:var(--danger)">*</span></label>
+        <input type="text" class="form-input" id="rechargeTxid" placeholder="Hash de la transaction blockchain">
+      </div>
+
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:.75rem 1rem;font-size:.78rem;font-weight:600;color:#1e40af;margin-bottom:1rem">
+        ℹ️ Votre solde sera crédité après vérification de votre transaction par notre équipe (généralement sous 30 minutes).
+      </div>
+
+      <button class="btn-submit" onclick="submitRecharge()">📤 Soumettre la demande</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== TOAST ===== -->
+<div class="toast" id="toast">
+  <span id="toastIco">ℹ️</span>
+  <span id="toastMsg">Message</span>
+</div>
+
+<script>
+// ======= DROPDOWN =======
+function toggleDropdown(id){
+  const el=document.getElementById(id);
+  const isOpen=el.classList.contains('open');
+  document.querySelectorAll('.dropdown-menu,.currency-dropdown').forEach(d=>d.classList.remove('open'));
+  if(!isOpen) el.classList.add('open');
+}
+document.addEventListener('click',e=>{
+  if(!e.target.closest('#serviceDropItem')&&!e.target.closest('#currWrap')){
+    document.querySelectorAll('.dropdown-menu,.currency-dropdown').forEach(d=>d.classList.remove('open'));
+  }
+});
+
+// ======= CURRENCY =======
+function setCurrency(code){
+  document.getElementById('currLabel').textContent=code;
+  document.querySelectorAll('.currency-option').forEach(o=>o.classList.toggle('active',o.textContent.includes(code)));
+  document.getElementById('currMenu').classList.remove('open');
+}
+
+// ======= MOBILE NAV =======
+function openMobileNav(){ document.getElementById('mobileNav').classList.add('open'); document.body.style.overflow='hidden'; }
+function closeMobileNav(){ document.getElementById('mobileNav').classList.remove('open'); document.body.style.overflow=''; }
+
+// ======= AUTH MODAL =======
+function openAuth(tab){
+  document.getElementById('authModal').classList.add('open');
+  switchAuthTab(tab||'login');
+}
+function closeAuth(){ document.getElementById('authModal').classList.remove('open'); }
+function switchAuthTab(tab){
+  document.getElementById('panelLogin').style.display=tab==='login'?'block':'none';
+  document.getElementById('panelRegister').style.display=tab==='register'?'block':'none';
+  document.getElementById('panelForgot').style.display='none';
+  document.getElementById('tabLogin').classList.toggle('active',tab==='login');
+  document.getElementById('tabRegister').classList.toggle('active',tab==='register');
+}
+function showForgot(){
+  document.getElementById('panelLogin').style.display='none';
+  document.getElementById('panelForgot').style.display='block';
+  document.getElementById('tabLogin').classList.remove('active');
+}
+function showLogin(){
+  document.getElementById('panelForgot').style.display='none';
+  document.getElementById('panelLogin').style.display='block';
+  document.getElementById('tabLogin').classList.add('active');
+}
+
+// ======= LOGGED IN / OUT UI (called from module) =======
+function setLoggedInUI(name){
+  document.getElementById('authBtns').style.display='none';
+  document.getElementById('userChip').style.display='flex';
+  document.getElementById('userName').textContent=name;
+  document.getElementById('userInitial').textContent=name.charAt(0).toUpperCase();
+  document.getElementById('loginAlert').style.display='none';
+  document.getElementById('balanceNotice').style.display='flex';
+  document.getElementById('orderFormWrap').style.opacity='1';
+  document.getElementById('orderFormWrap').style.pointerEvents='auto';
+  document.getElementById('orderBtn').disabled=false;
+  // Mobile nav
+  document.getElementById('mobileProfileBtn').style.display='flex';
+  document.getElementById('mobileLoginBtn').style.display='none';
+  document.getElementById('mobileRegisterBtn').style.display='none';
+}
+function setLoggedOutUI(){
+  document.getElementById('authBtns').style.display='flex';
+  document.getElementById('userChip').style.display='none';
+  document.getElementById('loginAlert').style.display='flex';
+  document.getElementById('balanceNotice').style.display='none';
+  document.getElementById('orderFormWrap').style.opacity='.6';
+  document.getElementById('orderFormWrap').style.pointerEvents='none';
+  document.getElementById('orderBtn').disabled=true;
+  document.getElementById('mobileProfileBtn').style.display='none';
+  document.getElementById('mobileLoginBtn').style.display='flex';
+  document.getElementById('mobileRegisterBtn').style.display='flex';
+}
+function updateBalanceUI(balance){
+  document.querySelectorAll('.user-balance-display').forEach(el=>el.textContent=parseFloat(balance||0).toFixed(2)+' USDT');
+}
+
+// ======= PROFILE MODAL =======
+function openProfile(){
+  if(!window._currentUserData){ openAuth('login'); return; }
+  const d=window._currentUserData;
+  document.getElementById('profileName').textContent=d.name;
+  document.getElementById('profileEmail').textContent=d.email;
+  document.getElementById('profileInitial').textContent=d.name.charAt(0).toUpperCase();
+  document.getElementById('infoName').textContent=d.name;
+  document.getElementById('infoEmail').textContent=d.email;
+  updateBalanceUI(d.balance||0);
+  document.getElementById('profileModal').classList.add('open');
+}
+function closeProfile(){ document.getElementById('profileModal').classList.remove('open'); }
+function openRechargeModal(){ document.getElementById('rechargeModal').classList.add('open'); }
+function closeRechargeModal(){ document.getElementById('rechargeModal').classList.remove('open'); }
+
+// Profile tabs
+function switchProfileTab(tab){
+  document.querySelectorAll('.profile-tab').forEach((t,i)=>t.classList.toggle('active',['orders','info'][i]===tab));
+  document.getElementById('ptOrders').classList.toggle('active',tab==='orders');
+  document.getElementById('ptInfo').classList.toggle('active',tab==='info');
+}
+
+// ======= FILE UPLOAD =======
+function handleFileUpload(input){
+  const file=input.files[0];
+  if(!file) return;
+  if(file.size>5*1024*1024){ showToast('Fichier trop volumineux (max 5MB)','error'); return; }
+  const reader=new FileReader();
+  reader.onload=e=>{
+    document.getElementById('uploadPlaceholder').style.display='none';
+    document.getElementById('uploadPreview').style.display='block';
+    document.getElementById('previewImg').src=e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+function removeImage(e){
+  e.stopPropagation();
+  document.getElementById('uploadPlaceholder').style.display='block';
+  document.getElementById('uploadPreview').style.display='none';
+  document.getElementById('fileInput').value='';
+}
+
+// ======= COPY WALLET =======
+function copyWallet(){
+  const addr='TRX7kQpXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
+  navigator.clipboard?.writeText(addr).then(()=>showToast('Adresse copiée !','success')).catch(()=>{});
+}
+
+// ======= TOAST =======
+function showToast(msg,type=''){
+  const t=document.getElementById('toast');
+  const ico=document.getElementById('toastIco');
+  document.getElementById('toastMsg').textContent=msg;
+  t.className='toast'+(type?' '+type:'');
+  ico.textContent=type==='success'?'✅':type==='error'?'⚠️':'ℹ️';
+  t.classList.add('show');
+  clearTimeout(window._toastTimer);
+  window._toastTimer=setTimeout(()=>t.classList.remove('show'),3500);
+}
+
+// Bridge from module to global
+window.setLoggedInUI = setLoggedInUI;
+window.setLoggedOutUI = setLoggedOutUI;
+window.updateBalanceUI = updateBalanceUI;
+window.openAuth = openAuth;
+window.openProfile = openProfile;
+window.closeProfile = closeProfile;
+window.openRechargeModal = openRechargeModal;
+window.closeRechargeModal = closeRechargeModal;
+window.showToast = showToast;
+
+// Escape & overlay close
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ closeAuth(); closeProfile(); closeRechargeModal(); } });
+document.getElementById('authModal').addEventListener('click',e=>{ if(e.target===e.currentTarget) closeAuth(); });
+document.getElementById('profileModal').addEventListener('click',e=>{ if(e.target===e.currentTarget) closeProfile(); });
+document.getElementById('rechargeModal').addEventListener('click',e=>{ if(e.target===e.currentTarget) closeRechargeModal(); });
+
+// Initial state
+document.getElementById('orderBtn').disabled=true;
+document.getElementById('orderFormWrap').style.opacity='.6';
+document.getElementById('orderFormWrap').style.pointerEvents='none';
+</script>
+
+<!-- Sync module userData to window for non-module scripts -->
+<script type="module">
+import { getAuth } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+// Wait for the app to be ready then listen for real-time balance updates
+const checkInterval = setInterval(() => {
+  if (window._fbAuth && window._fbDb) {
+    clearInterval(checkInterval);
+    window._fbAuth.onAuthStateChanged(user => {
+      if (user) {
+        const userRef = doc(window._fbDb, "users", user.uid);
+        onSnapshot(userRef, snap => {
+          if (snap.exists()) {
+            window._currentUserData = snap.data();
+            window.updateBalanceUI(snap.data().balance || 0);
+          }
+        });
+      } else {
+        window._currentUserData = null;
+      }
+    });
+  }
+}, 100);
+</script>
+</body>
+</html>
